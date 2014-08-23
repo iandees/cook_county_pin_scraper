@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import scrapy
 from scrapy.contrib.spiders import CSVFeedSpider
-
+from collections import OrderedDict
 from cook_county_pin_scraper.items import Property
 
 class PropertyinfoSpider(CSVFeedSpider):
@@ -9,7 +9,8 @@ class PropertyinfoSpider(CSVFeedSpider):
     name = "propertyinfo"
     allowed_domains = ["www.cookcountypropertyinfo.com"]
     start_urls = (
-        'file:///Users/iandees/Downloads/PINs for Ian/pins-unique.txt',
+        'file:///Users/iandees/Workspace/other/cook_county_pin_scraper/pins-unique.txt',
+        # 'file:///Users/iandees/Workspace/other/cook_county_pin_scraper/pin100.txt',
         # 'http://www.cookcountypropertyinfo.com/Pages/PIN-Results.aspx?PIN=17092620240000',
     )
 
@@ -37,18 +38,6 @@ class PropertyinfoSpider(CSVFeedSpider):
         item['zip_code'] = self.extract_with_prefix(response, 'propertyZip')
         item['township'] = self.extract_with_prefix(response, 'propertyTownship')
 
-        item['assessment_tax_year'] = self.extract_with_prefix(response, 'assessmentTaxYear', '/b')
-        if item['assessment_tax_year']:
-            item['assessment_tax_year'] = int(item['assessment_tax_year'][-4:])
-
-        item['estimated_value'] = self.extract_with_prefix(response, 'propertyEstimatedValue')
-        if item['estimated_value']:
-            item['estimated_value'] = int(item['estimated_value'].replace('$','').replace(',',''))
-
-        item['assessed_value'] = self.extract_with_prefix(response, 'propertyAssessedValue')
-        if item['assessed_value']:
-            item['assessed_value'] = int(item['assessed_value'].replace('$','').replace(',',''))
-
         item['lot_size'] = self.extract_with_prefix(response, 'propertyLotSize')
         if item['lot_size']:
             item['lot_size'] = int(item['lot_size'].replace(',', ''))
@@ -57,20 +46,57 @@ class PropertyinfoSpider(CSVFeedSpider):
         if item['building_size']:
             item['building_size'] = int(item['building_size'].replace(',', ''))
 
-        item['property_class'] = self.extract_with_prefix(response, 'propertyClass')
-        item['property_class_description'] = self.extract_with_prefix(response, 'msgPropertyClassDescription')
+        item['property_class'] = {
+            'class': self.extract_with_prefix(response, 'propertyClass'),
+            'description': self.extract_with_prefix(response, 'msgPropertyClassDescription').split(' - ')[1]
+        }
         item['building_age'] = self.extract_with_prefix(response, 'propertyBuildingAge')
 
-        item['mailing_tax_year'] = self.extract_with_prefix(response, 'mailingTaxYear', '/b')
-        if item['mailing_tax_year']:
-            item['mailing_tax_year'] = int(item['mailing_tax_year'][-4:])
-        item['mailing_name'] = self.extract_with_prefix(response, 'propertyMailingName')
-        item['mailing_address'] = self.extract_with_prefix(response, 'propertyMailingAddress')
-        item['mailing_city_state_zip'] = self.extract_with_prefix(response, 'propertyMailingCityStateZip')
+        mailing_tax_year = self.extract_with_prefix(response, 'mailingTaxYear', '/b')
+        if mailing_tax_year:
+            mailing_tax_year = int(mailing_tax_year[-4:])
+        mailing_name = self.extract_with_prefix(response, 'propertyMailingName')
+        mailing_address = self.extract_with_prefix(response, 'propertyMailingAddress')
+        mailing_city_state_zip = self.extract_with_prefix(response, 'propertyMailingCityStateZip')
+        item['mailing_address'] = OrderedDict([
+            ('year', mailing_tax_year),
+            ('name', mailing_name),
+            ('address', mailing_address),
+            ('city_state_zip', mailing_city_state_zip),
+        ])
 
-        item['tax_rate_year'] = int(self.extract_with_prefix(response, 'taxRateTaxYear')[1:5])
-        item['tax_rate'] = float(self.extract_with_prefix(response, 'propertyTaxRate'))
-        item['tax_code_year'] = int(self.extract_with_prefix(response, 'taxCodeTaxYear')[1:5])
-        item['tax_code'] = self.extract_with_prefix(response, 'propertyTaxCode')
+        years = OrderedDict()
+        for i in range(1, 6):
+            bill_year = self.extract_with_prefix(response, 'rptTaxBill_ctl0{}_taxBillYear'.format(i))
+            if bill_year:
+                bill_year = int(bill_year)
+            bill_amount = self.extract_with_prefix(response, 'rptTaxBill_ctl0{}_taxBillAmount'.format(i), '/font')
+            if bill_amount:
+                bill_amount = float(bill_amount.replace('$', '').replace(',', ''))
+            years[bill_year] = {
+                'bill': bill_amount
+            }
+
+        for row in response.xpath('//div[@id="assessedvaluehistory"]/div/table/tr'):
+            year, assessed_value = row.xpath('td/text()').extract()
+            year = int(year.strip())
+            assessed_value = int(assessed_value.replace(',', ''))
+            years[year]['assessment'] = assessed_value
+
+        for row in response.xpath('//div[@id="taxratehistory"]/div/table/tr'):
+            year, tax_rate = row.xpath('td/text()').extract()
+            year = int(year.strip())
+            tax_rate = float(tax_rate)
+            years[year]['tax_rate'] = tax_rate
+
+        tax_code_year = int(self.extract_with_prefix(response, 'taxCodeTaxYear')[1:5])
+        tax_code = self.extract_with_prefix(response, 'propertyTaxCode')
+        years[tax_code_year]['tax_code'] = tax_code
+
+        item['tax_history'] = []
+        for year, attrs in years.items():
+            year_dict = dict(year=year)
+            year_dict.update(attrs)
+            item['tax_history'].append(year_dict)
 
         yield item

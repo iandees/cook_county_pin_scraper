@@ -24,6 +24,9 @@ class PropertyinfoSpider(CSVFeedSpider):
             return None
 
     def parse_pin(self, response):
+        if self.extract_with_prefix(response, 'resultsNotFoundPanel'):
+            yield None
+
         item = Property()
 
         item['property_tax_year'] = self.extract_with_prefix(response, 'propertyTaxYear', '/b')
